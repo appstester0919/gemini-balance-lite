@@ -240,15 +240,32 @@ const adjustProps = (schemaPart) => {
   if (Array.isArray(schemaPart)) {
     schemaPart.forEach(adjustProps);
   } else {
-    if (schemaPart.type === "object" && schemaPart.properties && schemaPart.additionalProperties === false) {
+    // Strip ANY additionalProperties (false, true, or schema object) — Gemini rejects this field
+    if (schemaPart.type === "object" && schemaPart.properties && "additionalProperties" in schemaPart) {
       delete schemaPart.additionalProperties;
     }
     Object.values(schemaPart).forEach(adjustProps);
   }
 };
+// Hermes / OpenAI strict-mode JSON Schema adds fields Gemini's function_declarations
+// don't understand (strict, $schema, $ref, definitions). Strip recursively.
+const stripUnsupportedSchemaFields = (schemaPart) => {
+  if (typeof schemaPart !== "object" || schemaPart === null) return;
+  if (Array.isArray(schemaPart)) {
+    schemaPart.forEach(stripUnsupportedSchemaFields);
+    return;
+  }
+  for (const k of Object.keys(schemaPart)) {
+    if (k === "strict" || k === "$schema" || k === "$ref" || k === "definitions" || k === "$defs") {
+      delete schemaPart[k];
+    }
+  }
+  Object.values(schemaPart).forEach(stripUnsupportedSchemaFields);
+};
 const adjustSchema = (schema) => {
   const obj = schema[schema.type];
   delete obj.strict;
+  stripUnsupportedSchemaFields(schema);
   return adjustProps(schema);
 };
 
@@ -343,20 +360,37 @@ const parseImg = async (url) => {
   };
 };
 
+const MAX_FN_RESPONSE_CHARS = 50000; // Gemini handles large context but Hermes can stuff 100K+ matches into one tool result
 const transformFnResponse = ({ content, tool_call_id }, parts) => {
   if (!parts.calls) {
     throw new HttpError("No function calls found in the previous message", 400);
   }
   let response;
-  try {
-    response = JSON.parse(content);
-  } catch (err) {
-    console.error("Error parsing function response content:", err);
-    throw new HttpError("Invalid function response: " + content, 400);
+  // Hermes (and OpenAI tool result spec) allows content to be either a JSON-encoded string
+  // or a structured object. Previously this proxy required parseable JSON; now accept either
+  // and wrap raw strings as { result: "..." } so Gemini receives a valid function response.
+  if (typeof content === "string") {
+    try {
+      response = JSON.parse(content);
+    } catch (err) {
+      response = { result: content };
+    }
+  } else if (content && typeof content === "object") {
+    response = content;
+  } else {
+    response = { result: String(content ?? "") };
   }
   if (typeof response !== "object" || response === null || Array.isArray(response)) {
     response = { result: response };
   }
+  // Truncate oversize tool results (e.g. ripgrep dumping 200+ file matches) so the
+  // function response stays within Gemini's per-part limits and the model can still read it.
+  try {
+    const serialized = JSON.stringify(response);
+    if (serialized && serialized.length > MAX_FN_RESPONSE_CHARS) {
+      response = { result: serialized.slice(0, MAX_FN_RESPONSE_CHARS) + "\n…[truncated by gemini-balance-lite]" };
+    }
+  } catch (_) { /* unserializable — let downstream handle */ }
   if (!tool_call_id) {
     throw new HttpError("tool_call_id not specified", 400);
   }
@@ -490,7 +524,11 @@ const transformTools = (req) => {
     const funcs = req.tools.filter(tool => tool.type === "function" && tool.function?.name !== 'googleSearch');
     if (funcs.length > 0) {
       funcs.forEach(adjustSchema);
-      tools = [{ function_declarations: funcs.map(schema => schema.function) }];
+      // Defensive: strip any leftover OpenAI-strict fields from each function declaration
+      // (Gemini's function_declarations[].parameters rejects strict/$schema/$ref/definitions/$defs)
+      const declarations = funcs.map(schema => schema.function);
+      declarations.forEach(stripUnsupportedSchemaFields);
+      tools = [{ function_declarations: declarations }];
     }
   }
   if (req.tool_choice) {
