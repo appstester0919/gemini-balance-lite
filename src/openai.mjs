@@ -256,7 +256,14 @@ const stripUnsupportedSchemaFields = (schemaPart) => {
     return;
   }
   for (const k of Object.keys(schemaPart)) {
-    if (k === "strict" || k === "$schema" || k === "$ref" || k === "definitions" || k === "$defs") {
+    if (
+      k === "strict" || k === "$schema" || k === "$ref" ||
+      k === "definitions" || k === "$defs" ||
+      k === "exclusiveMinimum" || k === "exclusiveMaximum" ||
+      k === "const" || k === "examples" || k === "title" ||
+      k === "pattern" || k === "minLength" || k === "maxLength" ||
+      k === "multipleOf"
+    ) {
       delete schemaPart[k];
     }
   }
