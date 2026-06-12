@@ -261,8 +261,12 @@ const stripUnsupportedSchemaFields = (schemaPart) => {
       k === "definitions" || k === "$defs" ||
       k === "exclusiveMinimum" || k === "exclusiveMaximum" ||
       k === "const" || k === "examples" || k === "title" ||
-      k === "pattern" || k === "minLength" || k === "maxLength" ||
+      k === "minLength" || k === "maxLength" ||
       k === "multipleOf"
+      // NOTE: "pattern" removed from strip list — it conflicts with Hermes
+      // tools that have a properties key called "pattern" (e.g. search_files).
+      // Gemini's function_declarations actually supports `pattern` for regex
+      // string constraints, so there's no need to strip it anyway.
     ) {
       delete schemaPart[k];
     }
