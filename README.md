@@ -184,3 +184,32 @@ curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/chat/completions' \
 }'
 ```
 
+
+### Audio Output (TTS)
+
+Fork 扩展：支持 Audio -> Audio 模式（语音输入 -> 语音输出 / TTS）。
+在 OpenAI 格式请求中追加 `modalities` 和 `audio` 字段即可触发 Gemini 的
+`responseModalities` + `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`。
+响应 `choices[0].message.content` 会以**数组形式**返回，同时包含文本片段和
+`{type: "output_audio", data, format}` 音频片段（base64 编码）。
+
+**Curl 示例（TTS）：**
+```bash
+curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <YOUR_...KEY>' \
+--data '{
+    "model": "gemini-2.5-flash-preview-tts",
+    "messages": [
+        { "role": "user", "content": "用普通话说一句：语音输出正常。" }
+    ],
+    "modalities": ["text", "audio"],
+    "audio": { "voice": "Kore", "format": "wav" }
+}'
+```
+
+**可用音色（节选）：** `Kore`, `Puck`, `Charon`, `Fenrir`, `Aoede` 等，
+完整列表见 [Gemini TTS voices](https://ai.google.dev/gemini-api/docs/speech-generation#voices)。
+
+**快速自检端点：** `POST /verify-audio` 会自动发送一段 canned A2A 请求，
+返回 200 即代表 TTS 链路正常。

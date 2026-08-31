@@ -18,6 +18,30 @@ export async function handleRequest(request) {
     return handleVerification(request);
   }
 
+  // Audio Output (TTS) probe: forwards a canned Audio->Audio test request
+  // through the openai handler. Returns 200 with an output_audio part + base64 data,
+  // or 4xx/5xx with diagnostic if the model/voices are not available.
+  if (pathname === '/verify-audio' && request.method === 'POST') {
+    const errHandler = (err) => {
+      console.error(err);
+      return new Response(err.message, { status: err.status ?? 500 });
+    };
+    const fakeReq = new Request(request.url + '/chat/completions', {
+      method: 'POST',
+      headers: request.headers,
+      body: JSON.stringify({
+        model: 'gemini-2.5-flash-preview-tts',
+        messages: [{
+          role: 'user',
+          content: [{ type: 'text', text: "Say 'audio output works' in Mandarin Chinese." }]
+        }],
+        modalities: ['text', 'audio'],
+        audio: { voice: 'Kore', format: 'wav' },
+      }),
+    });
+    return openai.fetch(fakeReq).catch(errHandler);
+  }
+
   // 处理OpenAI格式请求
   if (url.pathname.endsWith("/chat/completions") || url.pathname.endsWith("/completions") || url.pathname.endsWith("/embeddings") || url.pathname.endsWith("/models")) {
     return openai.fetch(request);

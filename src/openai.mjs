@@ -340,6 +340,21 @@ const transformConfig = (req) => {
   if (req.reasoning_effort) {
     cfg.thinkingConfig = { thinkingBudget: thinkingBudgetMap[req.reasoning_effort] };
   }
+  // Audio Output (TTS): map OpenAI-style `modalities` + `audio` to Gemini's
+  // generationConfig.responseModalities + speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName.
+  if (Array.isArray(req.modalities)) {
+    cfg.responseModalities = req.modalities.map(m =>
+      typeof m === "string" ? m.toUpperCase() : m);
+  }
+  if (req.audio && typeof req.audio === "object") {
+    cfg.speechConfig = {
+      voiceConfig: {
+        prebuiltVoiceConfig: {
+          voiceName: req.audio.voice || "Kore",
+        },
+      },
+    };
+  }
   return cfg;
 };
 
@@ -580,6 +595,7 @@ const reasonsMap = { //https://ai.google.dev/api/rest/v1/GenerateContentResponse
 const SEP = "\n\n|>";
 const transformCandidates = (key, cand) => {
   const message = { role: "assistant", content: [] };
+  let hasAudio = false;
   for (const part of cand.content?.parts ?? []) {
     if (part.functionCall) {
       const fc = part.functionCall;
@@ -592,11 +608,28 @@ const transformCandidates = (key, cand) => {
           arguments: JSON.stringify(fc.args),
         }
       });
+    } else if (part.inlineData && (part.inlineData.mimeType || "").startsWith("audio/")) {
+      // Audio Output (TTS): Gemini returns audio as inlineData with audio/* mimeType.
+      // Emit as an OpenAI-style output_audio content part (array form, alongside any text).
+      hasAudio = true;
+      message.content.push({
+        type: "output_audio",
+        data: part.inlineData.data,
+        format: (part.inlineData.mimeType || "audio/wav").replace(/^audio\//, ""),
+      });
     } else {
-      message.content.push(part.text);
+      message.content.push(part.text ?? "");
     }
   }
-  message.content = message.content.join(SEP) || null;
+  if (!hasAudio) {
+    // text-only path: collapse to string (preserves original OpenAI shape)
+    message.content = message.content.join(SEP) || null;
+  } else {
+    // audio present: keep array form so client can split text vs output_audio.
+    // Drop empty-string entries introduced by the audio branch.
+    message.content = message.content.filter(c => c !== "");
+    if (message.content.length === 0) { message.content = null; }
+  }
   return {
     index: cand.index || 0, // 0-index is absent in new -002 models response
     [key]: message,
