@@ -119,7 +119,7 @@ export async function handleRequest(request) {
       method: 'POST',
       headers: request.headers,
       body: JSON.stringify({
-        model: 'gemini-3.5-transcribe',
+        model: 'gemini-3.5-flash',
         audio: { data: sampleWavB64, mimeType: 'audio/wav' },
         prompt: 'Transcribe this audio.',
       }),

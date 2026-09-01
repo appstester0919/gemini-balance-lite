@@ -114,7 +114,7 @@ async function handleAudioTranscription (req, apiKey) {
     return jsonError("audio data required (audio.data or file or input_audio)", 400);
   }
   const mime = req.audio?.mimeType || req.mime_type || "audio/wav";
-  const model = req.model || "gemini-3.5-transcribe";
+  const model = req.model || "gemini-3.5-flash";
   const prompt = req.prompt || "Transcribe the audio. If Cantonese, output both Cantonese characters AND a Mandarin translation.";
 
   const url = `${BASE_URL}/${API_VERSION}/models/${model}:generateContent`;
@@ -184,7 +184,7 @@ async function handleAudioToAudio (req, apiKey) {
   const headers = makeHeaders(apiKey, { "Content-Type": "application/json" });
 
   // Step 1: transcribe
-  const transcribeUrl = `${BASE_URL}/${API_VERSION}/models/gemini-3.5-transcribe:generateContent`;
+  const transcribeUrl = `${BASE_URL}/${API_VERSION}/models/gemini-3.5-flash:generateContent`;
   let transcribeResp;
   try {
     transcribeResp = await fetch(transcribeUrl, {
