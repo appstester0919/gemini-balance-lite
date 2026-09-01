@@ -23,8 +23,13 @@ export async function handleRequest(request) {
   // or 4xx/5xx with diagnostic if the model/voices are not available.
   if (pathname === '/verify-audio' && request.method === 'POST') {
     const errHandler = (err) => {
-      console.error(err);
-      return new Response(err.message, { status: err.status ?? 500 });
+      console.error('[verify-audio] error:', err?.message ?? err);
+      const status = err?.status ?? 500;
+      const msg = err?.message ?? String(err);
+      return new Response(JSON.stringify({ ok: false, error: msg }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
     };
     const fakeReq = new Request(request.url + '/chat/completions', {
       method: 'POST',
@@ -35,11 +40,19 @@ export async function handleRequest(request) {
           role: 'user',
           content: [{ type: 'text', text: "Say 'audio output works' in Mandarin Chinese." }]
         }],
-        modalities: ['text', 'audio'],
+        // FIX 2026-09-01: TTS model (gemini-2.5-flash-preview-tts) only accepts
+        // AUDIO modality; requesting both TEXT + AUDIO returns 400 INVALID_ARGUMENT
+        // from the upstream Gemini API. See Gemini API docs:
+        //   responseModalities: ["AUDIO"] is the only supported combo for TTS models.
+        modalities: ['audio'],
         audio: { voice: 'Kore', format: 'wav' },
       }),
     });
-    return openai.fetch(fakeReq).catch(errHandler);
+    try {
+      return await openai.fetch(fakeReq);
+    } catch (err) {
+      return errHandler(err);
+    }
   }
 
   // 处理OpenAI格式请求
