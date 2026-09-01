@@ -213,3 +213,40 @@ curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/chat/completions' \
 
 **快速自检端点：** `POST /verify-audio` 会自动发送一段 canned A2A 请求，
 返回 200 即代表 TTS 链路正常。
+
+### Audio → Audio (Transcribe + Translate + TTS)
+
+`POST /v1/audio/speech` — 接收音频输入，串行调用
+`gemini-3.5-transcribe` → `gemini-2.5-flash`（翻译）→ `gemini-2.5-flash-preview-tts`（TTS），
+最终返回包含 transcript、translation 以及 base64 编码 WAV 音频的 JSON。
+
+**Curl 示例：**
+```bash
+curl -X POST https://<YOUR_DEPLOYED_DOMAIN>/v1/audio/speech \
+  -H "Authorization: Bearer <YOUR_GEMINI_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "audio": { "data": "<base64>", "mimeType": "audio/wav" },
+    "source_lang": "yue",
+    "target_lang": "zh",
+    "voice": "Kore"
+  }'
+```
+
+**Response:**
+```json
+{
+  "transcript": "你好嗎",
+  "translation": "How are you?",
+  "audio": { "data": "<base64>", "format": "audio/L16;rate=24000" },
+  "voice": "Kore",
+  "source_lang": "yue",
+  "target_lang": "zh"
+}
+```
+
+**约束：** `gemini-2.5-flash-preview-tts` 仅接受 `responseModalities:["AUDIO"]`，
+本端点内部已硬编码该设置，调用方无需关心。
+
+**快速自检端点：** `POST /verify-audio-translate` 会发送一段 canned A2A 请求，
+返回 `ok:true` 即代表 transcribe → translate → TTS 链路全部正常。

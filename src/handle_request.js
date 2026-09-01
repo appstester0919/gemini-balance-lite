@@ -55,6 +55,46 @@ export async function handleRequest(request) {
     }
   }
 
+  // Audio -> Audio probe: sends a canned transcribe+translate+TTS request to
+  // /v1/audio/speech and returns a JSON summary with transcript, translation,
+  // and audio byte length (or ok:false with the error message).
+  if (pathname === '/verify-audio-translate' && request.method === 'POST') {
+    const errHandler = (err) => {
+      console.error('[verify-audio-translate] error:', err?.message ?? err);
+      return new Response(JSON.stringify({ ok: false, error: err?.message ?? String(err) }), {
+        status: err?.status ?? 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    // Short valid WAV header followed by 1 sample of silence — enough for
+    // gemini-3.5-transcribe to accept, even if the transcription is empty.
+    const sampleWavB64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+    const fakeReq = new Request(request.url + '/v1/audio/speech', {
+      method: 'POST',
+      headers: request.headers,
+      body: JSON.stringify({
+        audio: { data: sampleWavB64, mimeType: 'audio/wav' },
+        source_lang: 'en',
+        target_lang: 'zh',
+        voice: 'Kore',
+      }),
+    });
+    try {
+      const resp = await openai.fetch(fakeReq);
+      const body = await resp.json();
+      return new Response(JSON.stringify({
+        ok: resp.ok,
+        status: resp.status,
+        transcript: body?.transcript,
+        translation: body?.translation,
+        audio_bytes: body?.audio?.data ? Math.floor(body.audio.data.length * 3 / 4) : 0,
+        error: body?.error,
+      }), { headers: { 'Content-Type': 'application/json' } });
+    } catch (err) {
+      return errHandler(err);
+    }
+  }
+
   // 处理OpenAI格式请求
   if (url.pathname.endsWith("/chat/completions") || url.pathname.endsWith("/completions") || url.pathname.endsWith("/embeddings") || url.pathname.endsWith("/models")) {
     return openai.fetch(request);

@@ -41,6 +41,14 @@ export default {
           assert(request.method === "GET");
           return handleModels(apiKey)
             .catch(errHandler);
+        case pathname.endsWith("/audio/transcriptions"):
+          assert(request.method === "POST");
+          return handleAudioTranscription(await request.json(), apiKey)
+            .catch(errHandler);
+        case pathname.endsWith("/audio/speech"):
+          assert(request.method === "POST");
+          return handleAudioToAudio(await request.json(), apiKey)
+            .catch(errHandler);
         default:
           throw new HttpError("404 Not Found", 404);
       }
@@ -84,6 +92,149 @@ const makeHeaders = (apiKey, more) => ({
   ...(apiKey && { "x-goog-api-key": apiKey }),
   ...more
 });
+
+// Audio -> Text (OpenAI-compatible /v1/audio/transcriptions).
+// Forwards to Gemini transcribe model and returns OpenAI-shape response.
+async function handleAudioTranscription (req, apiKey) {
+  const audioB64 = req.audio?.data || req.file || req.input_audio;
+  if (!audioB64) {
+    throw new HttpError("audio data required (audio.data or file or input_audio)", 400);
+  }
+  const mime = req.audio?.mimeType || req.mime_type || "audio/wav";
+  const model = req.model || "gemini-3.5-transcribe";
+  const prompt = req.prompt || "Transcribe the audio. If Cantonese, output both Cantonese characters AND a Mandarin translation.";
+
+  const url = `${BASE_URL}/${API_VERSION}/models/${model}:generateContent`;
+  const geminiBody = {
+    contents: [{
+      role: "user",
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: mime, data: audioB64 } },
+      ],
+    }],
+    generationConfig: {
+      responseModalities: ["TEXT"],
+      temperature: 0.2,
+    },
+  };
+
+  const upstream = await fetch(url, {
+    method: "POST",
+    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
+    body: JSON.stringify(geminiBody),
+  });
+
+  if (!upstream.ok) {
+    const errBody = await upstream.text();
+    throw new HttpError(`upstream ${upstream.status}: ${errBody.slice(0, 500)}`, upstream.status);
+  }
+
+  const result = await upstream.json();
+  const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+  return new Response(JSON.stringify({
+    text,
+    language: req.language || "auto",
+    model,
+    raw: result,
+  }), fixCors({ headers: { "Content-Type": "application/json" } }));
+}
+
+// Audio -> Audio: transcribe (gemini-3.5-transcribe) -> translate (gemini-2.5-flash)
+//   -> TTS (gemini-2.5-flash-preview-tts). The TTS model ONLY accepts
+//   responseModalities:["AUDIO"] — hardcode that, otherwise upstream returns 400.
+async function handleAudioToAudio (req, apiKey) {
+  const audioB64 = req.audio?.data;
+  if (!audioB64) throw new HttpError("audio.data required", 400);
+  const mime = req.audio?.mimeType || "audio/wav";
+  const sourceLang = req.source_lang || "yue";
+  const targetLang = req.target_lang || "zh";
+  const voice = req.voice || "Kore";
+
+  const headers = makeHeaders(apiKey, { "Content-Type": "application/json" });
+
+  // Step 1: transcribe
+  const transcribeUrl = `${BASE_URL}/${API_VERSION}/models/gemini-3.5-transcribe:generateContent`;
+  const transcribeResp = await fetch(transcribeUrl, {
+    method: "POST", headers,
+    body: JSON.stringify({
+      contents: [{
+        role: "user",
+        parts: [
+          { text: `Transcribe the audio in its original language (${sourceLang}). Output ONLY the transcription, no translation, no preamble.` },
+          { inlineData: { mimeType: mime, data: audioB64 } }
+        ]
+      }],
+      generationConfig: { responseModalities: ["TEXT"], temperature: 0.2 },
+    }),
+  });
+  if (!transcribeResp.ok) {
+    throw new HttpError(`transcribe failed ${transcribeResp.status}: ${await transcribeResp.text()}`, 502);
+  }
+  const transcriptJson = await transcribeResp.json();
+  const transcript = transcriptJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  if (!transcript) throw new HttpError("transcribe returned empty", 502);
+
+  // Step 2: translate
+  const translateUrl = `${BASE_URL}/${API_VERSION}/models/gemini-2.5-flash:generateContent`;
+  const translateResp = await fetch(translateUrl, {
+    method: "POST", headers,
+    body: JSON.stringify({
+      contents: [{
+        role: "user",
+        parts: [{
+          text: `Translate this ${sourceLang} text into ${targetLang}. Output ONLY the translation, no preamble, no quotes:\n\n${transcript}`,
+        }],
+      }],
+      generationConfig: { responseModalities: ["TEXT"], temperature: 0.3 },
+    }),
+  });
+  if (!translateResp.ok) {
+    throw new HttpError(`translate failed ${translateResp.status}: ${await translateResp.text()}`, 502);
+  }
+  const translateJson = await translateResp.json();
+  const translation = translateJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  if (!translation) throw new HttpError("translate returned empty", 502);
+
+  // Step 3: TTS — MUST use responseModalities:["AUDIO"]
+  const ttsUrl = `${BASE_URL}/${API_VERSION}/models/gemini-2.5-flash-preview-tts:generateContent`;
+  const ttsResp = await fetch(ttsUrl, {
+    method: "POST", headers,
+    body: JSON.stringify({
+      contents: [{
+        role: "user",
+        parts: [{ text: translation }],
+      }],
+      generationConfig: {
+        responseModalities: ["AUDIO"],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } },
+        },
+      },
+    }),
+  });
+  if (!ttsResp.ok) {
+    throw new HttpError(`TTS failed ${ttsResp.status}: ${await ttsResp.text()}`, 502);
+  }
+  const ttsJson = await ttsResp.json();
+  // Gemini TTS returns audio in candidates[0].content.parts[0].inlineData.data (base64)
+  const audioPart = ttsJson.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+  const audioOutB64 = audioPart?.data;
+  if (!audioOutB64) throw new HttpError("TTS returned no audio data", 502);
+
+  return new Response(JSON.stringify({
+    transcript,
+    translation,
+    audio: {
+      data: audioOutB64,
+      format: audioPart?.mimeType || "audio/L16;rate=24000",
+    },
+    voice,
+    source_lang: sourceLang,
+    target_lang: targetLang,
+  }), fixCors({ headers: { "Content-Type": "application/json" } }));
+}
 
 async function handleModels (apiKey) {
   const response = await fetch(`${BASE_URL}/${API_VERSION}/models`, {
