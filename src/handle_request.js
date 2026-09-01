@@ -81,7 +81,13 @@ export async function handleRequest(request) {
     });
     try {
       const resp = await openai.fetch(fakeReq);
-      const body = await resp.json();
+      let body;
+      try {
+        body = await resp.json();
+      } catch (e) {
+        const raw = await resp.text();
+        body = { ok: false, error: `upstream returned non-JSON: ${raw.slice(0, 200)}` };
+      }
       return new Response(JSON.stringify({
         ok: resp.ok,
         status: resp.status,
@@ -120,7 +126,13 @@ export async function handleRequest(request) {
     });
     try {
       const resp = await openai.fetch(fakeReq);
-      const body = await resp.json();
+      let body;
+      try {
+        body = await resp.json();
+      } catch (e) {
+        const raw = await resp.text();
+        body = { ok: false, error: `upstream returned non-JSON: ${raw.slice(0, 200)}` };
+      }
       return new Response(JSON.stringify({
         ok: resp.ok,
         status: resp.status,
