@@ -95,8 +95,50 @@ export async function handleRequest(request) {
     }
   }
 
+  // Audio -> Text probe: sends a canned transcribe request to
+  // /v1/audio/transcriptions and returns a JSON summary with the transcribed
+  // text (or ok:false with the error message).
+  if (pathname === '/verify-transcribe' && request.method === 'POST') {
+    const errHandler = (err) => {
+      console.error('[verify-transcribe] error:', err?.message ?? err);
+      return new Response(JSON.stringify({ ok: false, error: err?.message ?? String(err) }), {
+        status: err?.status ?? 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    // Short valid WAV header followed by 1 sample of silence — enough for
+    // gemini-3.5-transcribe to accept, even if the transcription is empty.
+    const sampleWavB64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+    const fakeReq = new Request(request.url + '/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: request.headers,
+      body: JSON.stringify({
+        model: 'gemini-3.5-transcribe',
+        audio: { data: sampleWavB64, mimeType: 'audio/wav' },
+        prompt: 'Transcribe this audio.',
+      }),
+    });
+    try {
+      const resp = await openai.fetch(fakeReq);
+      const body = await resp.json();
+      return new Response(JSON.stringify({
+        ok: resp.ok,
+        status: resp.status,
+        text: body?.text || body?.error || '',
+      }), { headers: { 'Content-Type': 'application/json' } });
+    } catch (err) {
+      return errHandler(err);
+    }
+  }
   // 处理OpenAI格式请求
-  if (url.pathname.endsWith("/chat/completions") || url.pathname.endsWith("/completions") || url.pathname.endsWith("/embeddings") || url.pathname.endsWith("/models")) {
+  if (
+    url.pathname.endsWith("/chat/completions") ||
+    url.pathname.endsWith("/completions") ||
+    url.pathname.endsWith("/embeddings") ||
+    url.pathname.endsWith("/models") ||
+    url.pathname.endsWith("/audio/transcriptions") ||
+    url.pathname.endsWith("/audio/speech")
+  ) {
     return openai.fetch(request);
   }
 

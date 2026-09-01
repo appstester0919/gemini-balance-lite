@@ -249,4 +249,28 @@ curl -X POST https://<YOUR_DEPLOYED_DOMAIN>/v1/audio/speech \
 本端点内部已硬编码该设置，调用方无需关心。
 
 **快速自检端点：** `POST /verify-audio-translate` 会发送一段 canned A2A 请求，
+
+### Audio \xe2\x86\x92 Text (Transcription)
+
+`POST /v1/audio/transcriptions` \xe2\x86\x92 accepts OpenAI-style request, forwards to Gemini's `gemini-3.5-transcribe` model.
+
+**Curl \xe7\xa4\xba\xe4\xbe\x8b\xef\xbc\x9a**
+```bash
+curl -X POST https://<YOUR_DEPLOYED_DOMAIN>/v1/audio/transcriptions \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-3.5-transcribe",
+    "audio": { "data": "<base64-audio>", "mimeType": "audio/wav" },
+    "prompt": "Transcribe this Cantonese audio into written Cantonese, then translate to Mandarin",
+    "language": "yue"
+  }'
+```
+
+**Response:**
+```json
+{ "text": "...", "language": "yue", "model": "gemini-3.5-transcribe" }
+```
+
+�\x9c\x93\xe2\x9c\x93 **�\xbf\xab\xe9\x80\x9f\xe8\x87\xaa\xe6\xa3�\xe7\xab\xaf\xe7\x82\xb9\xef\xbc\x9a** `POST /verify-transcribe` \xef\xbc\x88\xe6\x97\xa0\xe9\x9c\x80\xe8\xaf\xb7\xe6\xb1\x82\xe4\xbd\x93\xef\xbc\x89\xe3\x80\x82
 返回 `ok:true` 即代表 transcribe → translate → TTS 链路全部正常。
