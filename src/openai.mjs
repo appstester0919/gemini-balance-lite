@@ -123,10 +123,12 @@ async function handleAudioTranscription (req, apiKey) {
     return jsonError("audio data required (audio.data or file or input_audio)", 400);
   }
   const mime = req.audio?.mimeType || req.mime_type || "audio/wav";
-  // Default to gemini-2.5-pro — the documented audio-input capable model.
-  // gemini-3.5-flash is not reliably available; gemini-2.5-flash does NOT
-  // accept audio input (only the preview-tts variant handles audio output).
-  const model = req.model || "gemini-2.5-pro";
+  // Default to gemini-2.5-flash — supports audio input via inlineData and
+  // has the most generous free-tier rate limit. Verified 2026-09-02:
+  // gemini-2.5-pro 429s on free tier; gemini-3.5-transcribe is Interactions
+  // API only (not HTTP :generateContent). Source:
+  // https://ai.google.dev/gemini-api/docs/models
+  const model = req.model || "gemini-2.5-flash";
   const prompt = req.prompt || "Transcribe the audio. If Cantonese, output both Cantonese characters AND a Mandarin translation.";
 
   const url = `${BASE_URL}/${API_VERSION}/models/${model}:generateContent`;
@@ -252,9 +254,9 @@ async function handleAudioTextToSpeech (req, apiKey) {
   );
 }
 
-// Audio -> Audio: transcribe (gemini-2.5-pro — audio-capable) -> translate (gemini-2.5-flash)
-//   -> TTS (gemini-2.5-flash-preview-tts). The TTS model ONLY accepts
-//   responseModalities:["AUDIO"] — hardcode that, otherwise upstream returns 400.
+// Audio -> Audio: transcribe (gemini-2.5-flash — audio-capable, free-tier friendly)
+//   -> translate (gemini-2.5-flash) -> TTS (gemini-2.5-flash-preview-tts).
+//   The TTS model ONLY accepts responseModalities:["AUDIO"] — hardcode that.
 // Returns structured JSON for BOTH success and error paths so probes can
 // safely call resp.json() (see jsonError helper above).
 async function handleAudioToAudio (req, apiKey) {
@@ -267,10 +269,10 @@ async function handleAudioToAudio (req, apiKey) {
 
   const headers = makeHeaders(apiKey, { "Content-Type": "application/json" });
 
-  // Step 1: transcribe — use gemini-2.5-pro (audio-capable, stable).
-  // gemini-3.5-flash was previously tried but failed (see commit history);
-  // gemini-2.5-pro is the documented audio-input model.
-  const transcribeUrl = `${BASE_URL}/${API_VERSION}/models/gemini-2.5-pro:generateContent`;
+  // Step 1: transcribe — use gemini-2.5-flash (audio-capable, free-tier friendly).
+  // gemini-2.5-pro 429s on free tier (verified 2026-09-02).
+  // gemini-3.5-transcribe is Interactions-API only.
+  const transcribeUrl = `${BASE_URL}/${API_VERSION}/models/gemini-2.5-flash:generateContent`;
   let transcribeResp;
   try {
     transcribeResp = await fetch(transcribeUrl, {
