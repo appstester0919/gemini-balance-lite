@@ -47,8 +47,17 @@ export default {
             .catch(errHandler);
         case pathname.endsWith("/audio/speech"):
           assert(request.method === "POST");
-          return handleAudioToAudio(await request.json(), apiKey)
-            .catch(errHandler);
+          // Dispatch by body shape: if `input` field present (non-empty string)
+          // → pure Text-to-Speech (OpenAI /v1/audio/speech contract);
+          // else → Audio-to-Audio pipeline (transcribe + translate + TTS).
+          {
+            const speechBody = await request.json();
+            const hasTextInput = speechBody && typeof speechBody.input === "string" && speechBody.input.length > 0;
+            return (hasTextInput
+              ? handleAudioTextToSpeech(speechBody, apiKey)
+              : handleAudioToAudio(speechBody, apiKey)
+            ).catch(errHandler);
+          }
         default:
           throw new HttpError("404 Not Found", 404);
       }
@@ -114,7 +123,10 @@ async function handleAudioTranscription (req, apiKey) {
     return jsonError("audio data required (audio.data or file or input_audio)", 400);
   }
   const mime = req.audio?.mimeType || req.mime_type || "audio/wav";
-  const model = req.model || "gemini-3.5-flash";
+  // Default to gemini-2.5-pro — the documented audio-input capable model.
+  // gemini-3.5-flash is not reliably available; gemini-2.5-flash does NOT
+  // accept audio input (only the preview-tts variant handles audio output).
+  const model = req.model || "gemini-2.5-pro";
   const prompt = req.prompt || "Transcribe the audio. If Cantonese, output both Cantonese characters AND a Mandarin translation.";
 
   const url = `${BASE_URL}/${API_VERSION}/models/${model}:generateContent`;
@@ -168,7 +180,79 @@ async function handleAudioTranscription (req, apiKey) {
   }), fixCors({ headers: { "Content-Type": "application/json" } }));
 }
 
-// Audio -> Audio: transcribe (gemini-3.5-transcribe) -> translate (gemini-2.5-flash)
+// Pure Text-to-Speech (OpenAI /v1/audio/speech with `input` text field).
+// Forwards to Gemini TTS model. Returns OpenAI-shape JSON envelope:
+//   { ok: true, audio: { data: <base64>, format: <mimeType> }, model, voice }
+// Returns structured JSON for BOTH success and error paths so probes can
+// safely call resp.json() (see jsonError helper above).
+async function handleAudioTextToSpeech (req, apiKey) {
+  const text = req.input;
+  if (!text || typeof text !== "string") {
+    return jsonError("input (text) required", 400);
+  }
+  const model = req.model || "gemini-2.5-flash-preview-tts";
+  const voice = req.voice || "Kore";
+
+  const url = `${BASE_URL}/${API_VERSION}/models/${model}:generateContent`;
+  const geminiBody = {
+    contents: [{ role: "user", parts: [{ text }] }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } },
+      },
+    },
+  };
+
+  let upstream;
+  try {
+    upstream = await fetch(url, {
+      method: "POST",
+      headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
+      body: JSON.stringify(geminiBody),
+    });
+  } catch (e) {
+    return jsonError(`fetch failed: ${e.message}`, 502);
+  }
+
+  if (!upstream.ok) {
+    const errBody = await upstream.text();
+    return jsonError(`upstream ${upstream.status}`, upstream.status, {
+      upstream_status: upstream.status,
+      upstream_body: errBody.slice(0, 500),
+    });
+  }
+
+  let result;
+  try {
+    result = await upstream.json();
+  } catch (e) {
+    return jsonError(`upstream returned non-JSON: ${e.message}`, 502);
+  }
+
+  const part = result.candidates?.[0]?.content?.parts?.[0];
+  const audioB64 = part?.inlineData?.data;
+  const mimeType = part?.inlineData?.mimeType || "audio/L16;rate=24000";
+  if (!audioB64) {
+    return jsonError(
+      "upstream returned no audio",
+      502,
+      { upstream_body: JSON.stringify(result).slice(0, 500) }
+    );
+  }
+
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      audio: { data: audioB64, format: mimeType },
+      model,
+      voice,
+    }),
+    fixCors({ headers: { "Content-Type": "application/json" } })
+  );
+}
+
+// Audio -> Audio: transcribe (gemini-2.5-pro — audio-capable) -> translate (gemini-2.5-flash)
 //   -> TTS (gemini-2.5-flash-preview-tts). The TTS model ONLY accepts
 //   responseModalities:["AUDIO"] — hardcode that, otherwise upstream returns 400.
 // Returns structured JSON for BOTH success and error paths so probes can
@@ -183,8 +267,10 @@ async function handleAudioToAudio (req, apiKey) {
 
   const headers = makeHeaders(apiKey, { "Content-Type": "application/json" });
 
-  // Step 1: transcribe
-  const transcribeUrl = `${BASE_URL}/${API_VERSION}/models/gemini-3.5-flash:generateContent`;
+  // Step 1: transcribe — use gemini-2.5-pro (audio-capable, stable).
+  // gemini-3.5-flash was previously tried but failed (see commit history);
+  // gemini-2.5-pro is the documented audio-input model.
+  const transcribeUrl = `${BASE_URL}/${API_VERSION}/models/gemini-2.5-pro:generateContent`;
   let transcribeResp;
   try {
     transcribeResp = await fetch(transcribeUrl, {
