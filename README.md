@@ -117,7 +117,7 @@ Youtube: [https://www.youtube.com/@Tech_Shrimp](https://www.youtube.com/@Tech_Sh
 可以使用 Gemini 的原生 API 格式进行代理请求。
 **Curl 示例:**
 ```bash
-curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/v1beta/models/gemini-2.5-pro:generateContent' \
+curl -X POST --location 'https://<YOUR_DEPLOYED_DOMAIN>/v1beta/models/gemini-2.5-pro:generateContent' \
 --header 'Content-Type: application/json' \
 --header 'x-goog-api-key: <YOUR_GEMINI_API_KEY_1>,<YOUR_GEMINI_API_KEY_2>' \
 --data '{
@@ -135,7 +135,7 @@ curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/v1beta/models/gemini-2.5-pro:gen
 ```
 **Curl 示例:（流式）**
 ```bash
-curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/v1beta/models/gemini-2.5-pro:generateContent?alt=sse' \
+curl -X POST --location 'https://<YOUR_DEPLOYED_DOMAIN>/v1beta/models/gemini-2.5-pro:generateContent?alt=sse' \
 --header 'Content-Type: application/json' \
 --header 'x-goog-api-key: <YOUR_GEMINI_API_KEY_1>,<YOUR_GEMINI_API_KEY_2>' \
 --data '{
@@ -160,7 +160,7 @@ curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/v1beta/models/gemini-2.5-pro:gen
 
 **Curl 示例:**
 ```bash
-curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/verify' \
+curl -X POST --location 'https://<YOUR_DEPLOYED_DOMAIN>/verify' \
 --header 'x-goog-api-key: <YOUR_GEMINI_API_KEY_1>,<YOUR_GEMINI_API_KEY_2>'
 ```
 
@@ -170,7 +170,7 @@ curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/verify' \
 
 **Curl 示例:**
 ```bash
-curl --location 'https://<YOUR_DEPLOYED_DOMAIN>/chat/completions' \
+curl -X POST --location 'https://<YOUR_DEPLOYED_DOMAIN>/chat/completions' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: Bearer <YOUR_GEMINI_API_KEY>' \
 --data '{
