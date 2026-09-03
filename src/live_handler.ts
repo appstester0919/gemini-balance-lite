@@ -98,10 +98,29 @@ export function handleLiveWebSocket(req: Request): LiveUpgradeResult {
     },
     {
       onUpstreamMessage: (raw) => {
+        // 1) Speaker: existing 1:1 path.
         try {
           if (socket.readyState === WebSocket.OPEN) socket.send(raw);
         } catch (e) {
           errLog("socket.send failed:", e);
+        }
+        // 2) Listeners: fan-out the same raw frame to every attached
+        //    listener socket. We defensively snapshot the set so a
+        //    disconnect mid-iteration can't trip us, and we wrap each
+        //    send in try/catch — a slow/dead listener must NEVER break
+        //    the speaker path. If send() throws, evict that listener.
+        const listeners = sessionManager.listenersFor(sessionId);
+        for (const l of listeners) {
+          if (l.readyState !== WebSocket.OPEN) {
+            sessionManager.removeListener(sessionId, l);
+            continue;
+          }
+          try {
+            l.send(raw);
+          } catch (e) {
+            warn(`listener send failed, evicting: ${(e as Error)?.message ?? e}`);
+            sessionManager.removeListener(sessionId, l);
+          }
         }
       },
       onUpstreamClose: (code, reason) => {
@@ -147,6 +166,7 @@ export function handleLiveWebSocket(req: Request): LiveUpgradeResult {
       startedAt: Date.now(),
       upstreamReadyAt: Date.now(),
       reconnectCount: 0,
+      listeners: new Set<WebSocket>(),
     });
   } catch (e) {
     if (e instanceof SessionLimitError) {
@@ -243,6 +263,92 @@ export function handleLiveStatus(): Response {
     }, null, 2),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );
+}
+
+/**
+ * Read-only listener status endpoint. Returns one entry per active session
+ * with its current listener count — lets us verify fan-out is wired
+ * correctly without standing up a real speaker/listener WebSocket dance.
+ */
+export function handleListenersStatus(): Response {
+  const sessions = sessionManager.list().map((r) => ({
+    id: r.id,
+    listenerCount: r.listenerCount,
+  }));
+  return new Response(
+    JSON.stringify({ ok: true, sessions }, null, 2),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+/**
+ * Upgrade a browser listener WebSocket for `?session=<id>` and register
+ * it with the session manager. The listener receives a verbatim fan-out
+ * of every upstream frame (binary PCM audio for audio responses). It does
+ * NOT need to (and should not) send anything — if it does, we ignore it.
+ *
+ * Returns a 400/404 Response WITHOUT upgrading if the session id is
+ * missing/unknown, so callers can surface a clean error.
+ */
+export function handleListenWebSocket(req: Request): Response {
+  const url = new URL(req.url);
+  const sessionId = url.searchParams.get("session");
+  if (!sessionId) {
+    return new Response(
+      JSON.stringify({ error: "Missing required query parameter: session" }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  const upgradeHeader = req.headers.get("upgrade");
+  if (upgradeHeader?.toLowerCase() !== "websocket") {
+    return new Response(
+      JSON.stringify({
+        error: "WebSocket required",
+        hint: "Connect with `new WebSocket('ws://host/ws/listen?session=<id>')`",
+      }),
+      { status: 426, headers: { "Content-Type": "application/json", "Upgrade": "websocket" } },
+    );
+  }
+  if (!sessionManager.has(sessionId)) {
+    return new Response(
+      JSON.stringify({ error: "Unknown session", sessionId }),
+      { status: 404, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  const { socket, response } = Deno.upgradeWebSocket(req);
+  const log = (...args: unknown[]) => console.log(`[listen:${sessionId.slice(0, 6)}]`, ...args);
+  const warn = (...args: unknown[]) => console.warn(`[listen:${sessionId.slice(0, 6)}]`, ...args);
+
+  // Register BEFORE any event fires. addListener is idempotent for a given
+  // socket identity; if it returns false the session vanished, which is a
+  // race we close cleanly.
+  if (!sessionManager.addListener(sessionId, socket)) {
+    try {
+      socket.close(1011, "session vanished");
+    } catch (_) { /* ignore */ }
+    return new Response(
+      JSON.stringify({ error: "session vanished during upgrade" }),
+      { status: 410, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  log(`listener attached (now ${sessionManager.get(sessionId)?.listeners.size ?? "?"})`);
+
+  // Listeners are read-only — we discard anything the browser sends. If a
+  // future feature needs listener→upstream messages (raise-hand, questions,
+  // etc.) it goes through a separate control channel, not this socket.
+  socket.addEventListener("message", () => { /* ignore */ });
+
+  socket.addEventListener("close", () => {
+    sessionManager.removeListener(sessionId, socket);
+    log(`listener detached`);
+  });
+  socket.addEventListener("error", (ev) => {
+    warn(`listener socket error:`, ev);
+    sessionManager.removeListener(sessionId, socket);
+  });
+
+  return response;
 }
 
 function errResult(status: number, message: string): LiveUpgradeResult {

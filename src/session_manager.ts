@@ -23,6 +23,14 @@ export interface SessionRecord {
   startedAt: number;
   upstreamReadyAt: number | null; // when setupComplete arrived
   reconnectCount: number;
+  /**
+   * Read-only listener WebSockets attached to this session. They receive
+   * a verbatim fan-out of every upstream frame so a remote audience can
+   * play back the translated audio. Speakers (the WebSocket that created
+   * the session) are NOT in this set — they're handled separately by the
+   * live_handler closure.
+   */
+  listeners: Set<WebSocket>;
 }
 
 class SessionManager {
@@ -54,6 +62,8 @@ class SessionManager {
           `Raise GMB_MAX_LIVE_SESSIONS or close idle sessions.`,
       );
     }
+    // Ensure listeners set exists even if caller omitted it (defensive).
+    if (!record.listeners) record.listeners = new Set<WebSocket>();
     this.sessions.set(record.id, record);
   }
 
@@ -65,14 +75,52 @@ class SessionManager {
     this.sessions.delete(id);
   }
 
+  /**
+   * Attach a read-only listener WebSocket to a session. No-op if the
+   * session doesn't exist (returns false). Returns true on success.
+   */
+  addListener(id: string, ws: WebSocket): boolean {
+    const rec = this.sessions.get(id);
+    if (!rec) return false;
+    rec.listeners.add(ws);
+    return true;
+  }
+
+  /** Detach a listener. Safe to call with a non-member ws. */
+  removeListener(id: string, ws: WebSocket): void {
+    const rec = this.sessions.get(id);
+    if (!rec) return;
+    rec.listeners.delete(ws);
+  }
+
+  /**
+   * Snapshot of listener WebSockets for a session. Returns an empty set
+   * if the session doesn't exist (callers can iterate safely).
+   *
+   * We hand back a NEW Set so the caller can mutate without affecting
+   * the manager — and so fan-out loops can capture a stable view even
+   * if a listener disconnects mid-iteration.
+   */
+  listenersFor(id: string): Set<WebSocket> {
+    const rec = this.sessions.get(id);
+    if (!rec) return new Set();
+    return new Set(rec.listeners);
+  }
+
   /** Snapshot — for /health-style endpoints. */
-  list(): Array<Pick<SessionRecord, "id" | "apiKey" | "startedAt" | "upstreamReadyAt" | "reconnectCount">> {
+  list(): Array<
+    Pick<
+      SessionRecord,
+      "id" | "apiKey" | "startedAt" | "upstreamReadyAt" | "reconnectCount"
+    > & { listenerCount: number }
+  > {
     return [...this.sessions.values()].map((r) => ({
       id: r.id,
       apiKey: `${r.apiKey.slice(0, 5)}…${r.apiKey.slice(-4)}`,
       startedAt: r.startedAt,
       upstreamReadyAt: r.upstreamReadyAt,
       reconnectCount: r.reconnectCount,
+      listenerCount: r.listeners.size,
     }));
   }
 }

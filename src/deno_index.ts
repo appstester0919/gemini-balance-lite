@@ -24,7 +24,12 @@
 // edge deployments (which do NOT route through this file).
 
 import { handleRequest } from "./handle_request.js";
-import { handleLiveStatus, handleLiveWebSocket } from "./live_handler.ts";
+import {
+  handleListenWebSocket,
+  handleListenersStatus,
+  handleLiveStatus,
+  handleLiveWebSocket,
+} from "./live_handler.ts";
 
 const PORT = Number(Deno.env.get("PORT")) || 8000;
 
@@ -59,6 +64,17 @@ function denoHandleRequest(req: Request): Promise<Response> | Response {
 
   if (pathname === "/ws/live/status") {
     return handleLiveStatus();
+  }
+
+  if (pathname === "/ws/live/listeners") {
+    return handleListenersStatus();
+  }
+
+  // Read-only listener WebSocket — receives a verbatim fan-out of every
+  // upstream Gemini Live frame so a remote audience can play back the
+  // translated audio. Pairs with `?session=<id>` issued by /ws/live.
+  if (pathname === "/ws/listen") {
+    return handleListenWebSocket(req);
   }
 
   // Everything else — delegate to the existing HTTP router.
